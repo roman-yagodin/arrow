@@ -55,11 +55,13 @@ public static class Program
 		var deltas = new Dictionary<int,int>();
 		var signal = new byte[data.Length];
 		
-		// try to generate sequence of bytes that match original sequence 
+		// Try to generate sequence of bytes that match original sequence.
 		for (var seed = 0; seed < maxSeed; seed++) {
 
-			// TODO: Replace with custom RNG independent from .NET
-			// can also use other generators here
+			if (seed % 1000_000 == 0)
+				Console.WriteLine($"seed: {seed}");
+
+			// Can replace with custom RNG independent from .NET and/or use other generators here...
 			var rnd = new Random(seed);
 			rnd.Next();
 			rnd.Next();
@@ -68,31 +70,29 @@ public static class Program
 			for (var i = 0; i < data.Length; i++) {
 				signal[i] = (byte)rnd.Next(256);
 
-				// can we encode resulting noise in the same range as in original sequence?
+				// Cutting original sequence to signal and noise increase noise range!
 				var noise = (int)data[i] - (int)signal[i];
-				if (noise > sbyte.MaxValue || noise < sbyte.MinValue) {
-					goto endFor1;
-				}
 
-				// calc deltas[seed] as number of points in generated sequence (signal) that differ from original for current seed value
-				// TODO: Detect minimal noise by value
-				if (noise != 0) delta++;
+				delta += noise >= 0 ? noise : -noise;
 	        }
 
-			if (delta < data.Length / 2) {
+			// Take sequences with minimal overall (integral) noise.
+			if (delta < data.Length * 58) {
 				deltas[seed] = delta;
 				Console.WriteLine($"Found nice seed: {seed}!");
-
+				
 				if (delta == 0) {
 					Console.WriteLine($"Found cool seed: {seed}!!!");
- 					break;
+					break;
+				}
+
+				if (deltas.Count >= 3) {
+					break;
 				}
 			}
-
-			endFor1: ;
 		}
 		
-		// find minumum delta (maximize signal, minimize noise)
+		// Find minumum delta.
 		var minDelta = int.MaxValue;
 		var minDeltaSeed = -1;
 		foreach (var seed in deltas.Keys) {
@@ -102,7 +102,7 @@ public static class Program
 			}
 		}
 
-		Console.WriteLine($"Min. number of different points: {minDelta}");
+		Console.WriteLine($"Min. delta: {minDelta}");
 
 		var outChunk = new OutChunk();
 		outChunk.Seed = minDeltaSeed;
@@ -110,21 +110,44 @@ public static class Program
 			outChunk.DataLength = 0;
 			outChunk.Data = null;
 		}
-		else {
-			var noise = new byte[data.Length];
+		else if (minDelta > 0) {
+			// Extract and compress noise.
+			var rnd = new Random(outChunk.Seed);
+			rnd.Next();
+			rnd.Next();
+
+			var noise = new ushort[data.Length];
 			for (var i = 0; i < data.Length; i++) {
-				// calc noise and move value to a byte range
-				noise[i] = (byte)((int)data[i] - (int)signal[i] - (int)sbyte.MinValue);
+				var signal_i = rnd.Next(256);
+				noise[i] = (ushort)((int)data[i] - signal_i);
 			}
 
-			outChunk.Data = CompressNoise(noise);
+			outChunk.Data = CompressData(ConvertNoiseToBytes(noise));
+			outChunk.DataLength = outChunk.Data.Length;
+		}
+		else {
+			// Compress raw data.
+			outChunk.Data = CompressData(data);
 			outChunk.DataLength = outChunk.Data.Length;
 		}
 
 		return outChunk;
 	}
 
-	static byte[] CompressNoise(byte[] data)
+	static byte[] ConvertNoiseToBytes(ushort[] noise)
+	{
+		var data = new byte[noise.Length * 2];
+		for (var i = 0; i < noise.Length; i++) {
+			var j = i * 2;
+			unchecked {
+				data[j] = (byte)(noise[i] / 256);
+				data[j + 1] = (byte)(noise[i] % 256); 
+			}
+		}
+		return data;
+	}
+
+	static byte[] CompressData(byte[] data)
 	{
 		using var inStream = new MemoryStream(data);
 		using var outStream = new MemoryStream();
