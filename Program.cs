@@ -18,7 +18,7 @@ public static class Program
 
 		public void Write(BinaryWriter writer)
 		{
-			writer.Write((byte)Seed);
+			writer.Write(Seed);
 			writer.Write((byte)DataLength);
 			if (Data != null) {
 				writer.Write(Data);
@@ -51,8 +51,8 @@ public static class Program
 
 	static OutChunk CompressChunkA1(byte[] data)
 	{
-		const int maxSeed = 256;
-		var deltas = new int[maxSeed];
+		const int maxSeed = int.MaxValue;
+		var deltas = new Dictionary<int,int>();
 		var signal = new byte[data.Length];
 		
 		// try to generate sequence of bytes that match original sequence 
@@ -64,24 +64,29 @@ public static class Program
 			rnd.Next();
 			rnd.Next();
 			
+			var delta = 0;
 			for (var i = 0; i < data.Length; i++) {
 				signal[i] = (byte)rnd.Next(256);
 
-				// can we encode resulting noise in a byte range?
+				// can we encode resulting noise in the same range as in original sequence?
 				var noise = (int)data[i] - (int)signal[i];
 				if (noise > sbyte.MaxValue || noise < sbyte.MinValue) {
-					deltas[seed] = int.MaxValue;
 					goto endFor1;
 				}
 
 				// calc deltas[seed] as number of points in generated sequence (signal) that differ from original for current seed value
 				// TODO: Detect minimal noise by value
-				if (noise != 0) deltas[seed]++;
+				if (noise != 0) delta++;
 	        }
 
-			if (deltas[seed] == 0) {
-				Console.WriteLine($"Found seed: {seed}");
- 				break;
+			if (delta < data.Length / 2) {
+				deltas[seed] = delta;
+				Console.WriteLine($"Found nice seed: {seed}!");
+
+				if (delta == 0) {
+					Console.WriteLine($"Found cool seed: {seed}!!!");
+ 					break;
+				}
 			}
 
 			endFor1: ;
@@ -90,7 +95,7 @@ public static class Program
 		// find minumum delta (maximize signal, minimize noise)
 		var minDelta = int.MaxValue;
 		var minDeltaSeed = -1;
-		for (var seed = 0; seed < maxSeed; seed++) {
+		foreach (var seed in deltas.Keys) {
 		    if (deltas[seed] < minDelta) {
 				minDelta = deltas[seed];
 				minDeltaSeed = seed;
