@@ -1,35 +1,131 @@
 ﻿using System;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Collections.Generic;
 
+namespace Arrow;
+
 public static class Program
 {
+	struct OutChunk
+	{
+		public int Seed;
+
+		public int DataLength;
+
+		public byte[]? Data;
+
+		public void Write(BinaryWriter writer)
+		{
+			writer.Write((byte)Seed);
+			writer.Write((byte)DataLength);
+			if (Data != null) {
+				writer.Write(Data);
+			}
+		}
+	}
+
 	public static void Main()
 	{
-		var data = File.ReadAllBytes("lorem_ipsum.txt");
-		
-		var deltas = new byte[256];
+		using var inStream = new FileStream("lorem_ipsum.txt", FileMode.Open, FileAccess.Read);
+		using var outStream = new FileStream("compressed.bin", FileMode.Create, FileAccess.Write);
+
+		using var binaryReader = new BinaryReader(inStream);
+		using var binaryWriter = new BinaryWriter(outStream);
+
+		byte[] dataChunk;
+		var chunkNum = 1;
+		do {
+			Console.WriteLine($"Chunk number: {chunkNum}");
+
+			dataChunk = binaryReader.ReadBytes(256);
+			var outChunk = CompressChunkA1(dataChunk);
+			outChunk.Write(binaryWriter);
+
+			chunkNum++;
+		} while (dataChunk.Length == 256);
+
+		binaryWriter.Close();
+	}
+
+	static OutChunk CompressChunkA1(byte[] data)
+	{
+		const int maxSeed = 256;
+		var deltas = new int[maxSeed];
 		var signal = new byte[data.Length];
-		for (var seed = 0; seed < 256; seed++) {
+		
+		// try to generate sequence of bytes that match original sequence 
+		for (var seed = 0; seed < maxSeed; seed++) {
+
+			// TODO: Replace with custom RNG independent from .NET
+			// can also use other generators here
 			var rnd = new Random(seed);
+			rnd.Next();
 			rnd.Next();
 			
 			for (var i = 0; i < data.Length; i++) {
 				signal[i] = (byte)rnd.Next(256);
-			    deltas[seed] += (byte)Math.Abs(data[i] - signal[i]);
+
+				// can we encode resulting noise in a byte range?
+				var noise = (int)data[i] - (int)signal[i];
+				if (noise > sbyte.MaxValue || noise < sbyte.MinValue) {
+					deltas[seed] = int.MaxValue;
+					goto endFor1;
+				}
+
+				// calc deltas[seed] as number of points in generated sequence (signal) that differ from original for current seed value
+				// TODO: Detect minimal noise by value
+				if (noise != 0) deltas[seed]++;
 	        }
+
+			if (deltas[seed] == 0) {
+				Console.WriteLine($"Found seed: {seed}");
+ 				break;
+			}
+
+			endFor1: ;
 		}
 		
+		// find minumum delta (maximize signal, minimize noise)
 		var minDelta = int.MaxValue;
 		var minDeltaSeed = -1;
-		for (var seed = 0; seed < 256; seed++) {
+		for (var seed = 0; seed < maxSeed; seed++) {
 		    if (deltas[seed] < minDelta) {
 				minDelta = deltas[seed];
 				minDeltaSeed = seed;
 			}
 		}
-		
-		Console.WriteLine($"minDelta {minDelta} on seed {minDeltaSeed}");	
+
+		Console.WriteLine($"Min. number of different points: {minDelta}");
+
+		var outChunk = new OutChunk();
+		outChunk.Seed = minDeltaSeed;
+		if (minDelta == 0) {
+			outChunk.DataLength = 0;
+			outChunk.Data = null;
+		}
+		else {
+			var noise = new byte[data.Length];
+			for (var i = 0; i < data.Length; i++) {
+				// calc noise and move value to a byte range
+				noise[i] = (byte)((int)data[i] - (int)signal[i] - (int)sbyte.MinValue);
+			}
+
+			outChunk.Data = CompressNoise(noise);
+			outChunk.DataLength = outChunk.Data.Length;
+		}
+
+		return outChunk;
+	}
+
+	static byte[] CompressNoise(byte[] data)
+	{
+		using var inStream = new MemoryStream(data);
+		using var outStream = new MemoryStream();
+		using var gzipStream = new GZipStream(outStream, CompressionMode.Compress);
+		inStream.CopyTo(gzipStream);
+		gzipStream.Flush();
+		return outStream.ToArray();
 	}
 }
